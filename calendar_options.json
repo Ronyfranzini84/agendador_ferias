@@ -1,0 +1,28 @@
+
+{
+    "editable": "true",
+    "selectable": "true",
+    "headerToolbar": {
+        "left": "today prev,next",
+        "center": "title",
+        "right": "dayGridMonth,resourceTimelineMonth"
+    },
+    "slotMinTime": "06:00:00",
+    "slotMaxTime": "23:00:00",
+    "resourceGroupField": "building",
+    "resources": [
+        {"id": "a", "building": "Wave Pesado", "title": "Building A"},
+        {"id": "b", "building": "Wave Pesado", "title": "Building B"},
+        {"id": "c", "building": "Wave Leves Online", "title": "Building C"},
+        {"id": "d", "building": "Wave Leves Online", "title": "Building D"},
+        {"id": "e", "building": "Picking", "title": "Building E"},
+        {"id": "f", "building": "Picking", "title": "Building F"}
+    ],
+    "buttonText": {
+        "today": "Hoje",
+        "dayGridMonth": "Calendario",
+        "resourceTimelineMonth": "Lista"
+    },
+    "initialView": "dayGridMonth",
+    "locale": "pt-br"
+}
