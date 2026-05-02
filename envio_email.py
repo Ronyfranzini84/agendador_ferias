@@ -1,7 +1,9 @@
 import base64
 import json
+import re
 import smtplib
 import subprocess
+import unicodedata
 from email.message import EmailMessage
 
 
@@ -26,6 +28,47 @@ def _validar_email(endereco):
     if not endereco_normalizado or "@" not in endereco_normalizado:
         raise EmailEnvioError("Informe um e-mail valido.")
     return endereco_normalizado
+
+
+def _normalizar_texto_email(texto):
+    conteudo = (texto or "").strip()
+    if not conteudo:
+        return ""
+
+    for _ in range(3):
+        if "\\" not in conteudo:
+            break
+        if not any(token in conteudo for token in ("\\n", "\\u", "\\t", "\\r")):
+            break
+
+        anterior = conteudo
+        try:
+            conteudo = conteudo.encode("utf-8").decode("unicode_escape")
+        except UnicodeDecodeError:
+            break
+
+        if conteudo == anterior:
+            break
+
+    conteudo = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), conteudo)
+
+    conteudo = (
+        conteudo.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\n")
+        .replace("\r\n", "\n")
+        .strip()
+    )
+
+    conteudo = "".join(
+        ch for ch in unicodedata.normalize("NFD", conteudo) if unicodedata.category(ch) != "Mn"
+    )
+    conteudo = conteudo.replace("ç", "c").replace("Ç", "C")
+
+    if conteudo.upper().startswith("MENSAGEM:"):
+        conteudo = conteudo.split(":", 1)[1].strip()
+    return conteudo
 
 
 def _codificar_script_powershell(script):
@@ -107,10 +150,13 @@ def enviar_email(
     if not (senha or "").strip():
         raise EmailEnvioError("Informe a senha ou app password do e-mail do gestor.")
 
-    if not (assunto or "").strip():
+    assunto_normalizado = _normalizar_texto_email(assunto)
+    mensagem_normalizada = _normalizar_texto_email(mensagem)
+
+    if not assunto_normalizado:
         raise EmailEnvioError("Informe o assunto do e-mail.")
 
-    if not (mensagem or "").strip():
+    if not mensagem_normalizada:
         raise EmailEnvioError("Digite a mensagem que sera enviada ao funcionario.")
 
     configuracao = configurar_smtp(
@@ -123,8 +169,8 @@ def enviar_email(
     email = EmailMessage()
     email["From"] = remetente_normalizado
     email["To"] = destinatario_normalizado
-    email["Subject"] = assunto.strip()
-    email.set_content(mensagem.strip())
+    email["Subject"] = assunto_normalizado
+    email.set_content(mensagem_normalizada)
 
     try:
         with smtplib.SMTP(configuracao["host"], configuracao["port"], timeout=30) as servidor:
@@ -146,16 +192,19 @@ def _executar_outlook(remetente, destinatario, assunto, mensagem, modo_envio):
     remetente_normalizado = _validar_email(remetente)
     destinatario_normalizado = _validar_email(destinatario)
 
-    if not (assunto or "").strip():
+    assunto_normalizado = _normalizar_texto_email(assunto)
+    mensagem_normalizada = _normalizar_texto_email(mensagem)
+
+    if not assunto_normalizado:
         raise EmailEnvioError("Informe o assunto do e-mail.")
 
-    if not (mensagem or "").strip():
+    if not mensagem_normalizada:
         raise EmailEnvioError("Digite a mensagem que sera enviada ao funcionario.")
 
     remetente_escaped = json.dumps(remetente_normalizado.lower())
     destinatario_escaped = json.dumps(destinatario_normalizado)
-    assunto_escaped = json.dumps(assunto.strip())
-    mensagem_escaped = json.dumps(mensagem.strip())
+    assunto_escaped = json.dumps(assunto_normalizado)
+    mensagem_escaped = json.dumps(mensagem_normalizada)
     comando_envio = "$mail.Send()" if modo_envio == "send" else "$mail.Save()`n    $mail.Display()"
     retorno_ok = "EMAIL_ENVIADO" if modo_envio == "send" else "RASCUNHO_CRIADO"
 

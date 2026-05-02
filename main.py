@@ -1,11 +1,13 @@
 import json
+import os
+import re
 import socket
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from streamlit_calendar import calendar
 
 from app_paths import caminho_recurso
 from bd_crud import (
@@ -18,7 +20,9 @@ from bd_crud import (
     ler_todos_usuarios,
     modificar_usuario,
 )
+from calendar_component import calendar
 from envio_email import EmailEnvioError, enviar_email, enviar_email_outlook
+from groq_ai import GroqAIError, gerar_rascunho_email_ia, gerar_resumo_dashboard_ia
 
 
 PASTA_ATUAL = Path(__file__).parent
@@ -84,6 +88,86 @@ def inicializar_estado():
 
 def definir_mensagem_rodape(tipo, texto):
     st.session_state[CHAVE_MENSAGEM_RODAPE] = {"tipo": tipo, "texto": texto}
+
+
+def obter_chave_api_groq_streamlit():
+    chave_env = os.getenv("GROQ_API_KEY", "").strip()
+    if chave_env:
+        return chave_env
+
+    try:
+        chave_secret = str(st.secrets.get("GROQ_API_KEY", "")).strip()
+    except Exception:
+        chave_secret = ""
+    return chave_secret
+
+
+def normalizar_texto_ia(texto):
+    conteudo = (texto or "").strip()
+    if not conteudo:
+        return ""
+
+    for _ in range(3):
+        if "\\" not in conteudo:
+            break
+        if not any(token in conteudo for token in ("\\n", "\\u", "\\t", "\\r")):
+            break
+
+        anterior = conteudo
+        try:
+            conteudo = conteudo.encode("utf-8").decode("unicode_escape")
+        except UnicodeDecodeError:
+            break
+
+        if conteudo == anterior:
+            break
+
+    conteudo = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), conteudo)
+
+    conteudo = (
+        conteudo.replace("\\\\r\\\\n", "\n")
+        .replace("\\\\n", "\n")
+        .replace("\\\\t", "\t")
+        .replace("\\\\r", "\n")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\n")
+        .replace("\r\n", "\n")
+        .strip()
+    )
+
+    conteudo = "".join(
+        ch for ch in unicodedata.normalize("NFD", conteudo) if unicodedata.category(ch) != "Mn"
+    )
+    conteudo = conteudo.replace("ç", "c").replace("Ç", "C")
+    return conteudo
+
+
+def extrair_assunto_mensagem_ia(resposta_ia):
+    resposta_normalizada = normalizar_texto_ia(resposta_ia)
+    assunto = ""
+    mensagem = ""
+    linhas = [linha.rstrip() for linha in resposta_normalizada.splitlines()]
+
+    for indice, linha in enumerate(linhas):
+        if linha.upper().startswith("ASSUNTO:"):
+            assunto = linha.split(":", 1)[1].strip()
+            restante = linhas[indice + 1 :]
+            if restante and restante[0].strip().upper() == "MENSAGEM:":
+                restante = restante[1:]
+            mensagem = "\n".join(restante).strip()
+            break
+
+    if not assunto:
+        assunto = "Comunicado do gestor"
+    if not mensagem:
+        mensagem = resposta_normalizada
+
+    if mensagem.upper().startswith("MENSAGEM:"):
+        mensagem = mensagem.split(":", 1)[1].strip()
+
+    return assunto, mensagem
 
 
 def obter_ip_local():
@@ -387,6 +471,31 @@ def pagina_dashboard_gestor():
         st.bar_chart(setores_df.set_index("setor")["dias_ausentes"], use_container_width=True)
         st.dataframe(setores_df, use_container_width=True, hide_index=True)
 
+    st.divider()
+    st.markdown("#### Insight executivo com IA (Groq)")
+    st.caption("A IA analisa os indicadores acima e sugere prioridades de acao para o gestor.")
+
+    if st.button("Gerar insight com IA", use_container_width=True):
+        contexto = {
+            "data_referencia": datetime.now().strftime("%Y-%m-%d"),
+            "total_dias_ausencia": total_ausencias,
+            "total_dias_ferias": total_ferias,
+            "setor_mais_impactado": setor_critico,
+            "setores": [] if dashboard_df.empty else dashboard_df.groupby("setor").size().sort_values(ascending=False).to_dict(),
+            "usuarios_com_saldo_insuficiente": [item["Funcionário"] for item in usuarios_sem_saldo],
+        }
+        try:
+            st.session_state["dashboard_insight_ia"] = gerar_resumo_dashboard_ia(
+                contexto_dashboard=contexto,
+                chave_api=obter_chave_api_groq_streamlit(),
+            )
+        except GroqAIError as exc:
+            st.error(str(exc))
+
+    insight_ia = st.session_state.get("dashboard_insight_ia", "").strip()
+    if insight_ia:
+        st.markdown(insight_ia)
+
 
 def limpar_datas():
     for chave in (CHAVE_DATA_INICIO, CHAVE_DATA_FINAL):
@@ -454,6 +563,11 @@ def limpar_formulario_email():
         "email_smtp_host",
         "email_smtp_port",
         "email_usuario_smtp",
+        "email_tom_ia",
+        "email_objetivo_ia",
+        "email_assunto_pendente",
+        "email_mensagem_pendente",
+        "email_feedback_ia",
     ):
         st.session_state.pop(chave, None)
 
@@ -469,7 +583,23 @@ def renderizar_tab_envio_email(usuarios):
 
     st.session_state.setdefault("email_remetente", gestor.email)
     st.session_state.setdefault("email_destinatario", "")
+    st.session_state.setdefault("email_assunto", "")
+    st.session_state.setdefault("email_mensagem", "")
     st.session_state.setdefault("email_usuario_smtp", gestor.email)
+    st.session_state.setdefault("email_tom_ia", "Profissional e cordial")
+    st.session_state.setdefault("email_objetivo_ia", "")
+
+    assunto_pendente = st.session_state.pop("email_assunto_pendente", None)
+    mensagem_pendente = st.session_state.pop("email_mensagem_pendente", None)
+    if assunto_pendente is not None:
+        st.session_state["email_assunto"] = assunto_pendente
+    if mensagem_pendente is not None:
+        st.session_state["email_mensagem"] = mensagem_pendente
+
+    feedback_ia = st.session_state.pop("email_feedback_ia", "")
+    if feedback_ia:
+        st.success(feedback_ia)
+
     if st.session_state.get("email_modo_envio") not in {"Outlook Desktop", "SMTP"}:
         st.session_state["email_modo_envio"] = "SMTP"
 
@@ -506,6 +636,15 @@ def renderizar_tab_envio_email(usuarios):
         destinatario = st.text_input("E-mail destinatario", key="email_destinatario")
         assunto = st.text_input("Assunto", key="email_assunto")
         mensagem = st.text_area("Mensagem", key="email_mensagem", height=180)
+        tom_ia = st.selectbox(
+            "Tom sugerido pela IA",
+            ["Profissional e cordial", "Direto e objetivo", "Empatico e acolhedor"],
+            key="email_tom_ia",
+        )
+        objetivo_ia = st.text_input(
+            "Objetivo opcional para IA (ex: confirmar periodo de ferias)",
+            key="email_objetivo_ia",
+        )
         senha = ""
         smtp_host = None
         smtp_porto = None
@@ -541,6 +680,30 @@ def renderizar_tab_envio_email(usuarios):
             )
 
         enviar = st.form_submit_button("Enviar e-mail", use_container_width=True)
+        gerar_ia = st.form_submit_button("Gerar assunto e mensagem com IA", use_container_width=True)
+
+    if gerar_ia:
+        try:
+            contexto_email = {
+                "gestor": gestor.nome,
+                "remetente": remetente,
+                "destinatario": destinatario,
+                "assunto_atual": assunto,
+                "mensagem_atual": mensagem,
+                "tom": tom_ia,
+                "objetivo": objetivo_ia,
+            }
+            resposta_ia = gerar_rascunho_email_ia(
+                contexto_email=contexto_email,
+                chave_api=obter_chave_api_groq_streamlit(),
+            )
+            assunto_ia, mensagem_ia = extrair_assunto_mensagem_ia(resposta_ia)
+            st.session_state["email_assunto_pendente"] = assunto_ia
+            st.session_state["email_mensagem_pendente"] = mensagem_ia
+            st.session_state["email_feedback_ia"] = "Rascunho gerado com IA. Revise antes de enviar."
+            st.rerun()
+        except GroqAIError as exc:
+            st.error(str(exc))
 
     if enviar:
         try:
@@ -889,27 +1052,47 @@ def login():
 
 
 def pagina_gestao():
+    ano_atual = datetime.now().year
+    ano_anterior = ano_atual - 1
+
     with st.sidebar:
         tab_gestao_usuarios()
 
     for usuario in ler_todos_usuarios():
+        _, tirados_ant, _ = usuario.dias_por_ano(ano_anterior)
+        direito_atual, tirados_atual, disponivel_atual = usuario.dias_por_ano(ano_atual)
+
         with st.container(border=True):
-            col_nome, col_dias = st.columns(2)
-            dias_disponiveis = usuario.dias_para_solicitar()
-            nome_formatado = f"##### {usuario.nome}"
-            mensagem_dias = f"**Dias de férias disponíveis para solicitar:** {dias_disponiveis}"
+            col_nome, col_ant, col_atual, col_disp = st.columns([2, 1, 1, 1])
 
             with col_nome:
-                if dias_disponiveis > 30:
-                    st.error(nome_formatado)
+                if disponivel_atual < 10:
+                    st.error(f"##### {usuario.nome}")
                 else:
-                    st.markdown(nome_formatado)
+                    st.markdown(f"##### {usuario.nome}")
 
-            with col_dias:
-                if dias_disponiveis > 30:
-                    st.error(mensagem_dias)
+            with col_ant:
+                st.metric(
+                    label=f"Usado em {ano_anterior}",
+                    value=f"{tirados_ant} dias",
+                )
+
+            with col_atual:
+                st.metric(
+                    label=f"Usado em {ano_atual}",
+                    value=f"{tirados_atual} dias",
+                    delta=f"{tirados_atual - tirados_ant:+d} vs {ano_anterior}",
+                    delta_color="inverse",
+                )
+
+            with col_disp:
+                label_disp = f"Disponível {ano_atual} (de {direito_atual})"
+                if disponivel_atual < 10:
+                    st.error(f"**{label_disp}:** {disponivel_atual} dias")
+                elif disponivel_atual > direito_atual * 0.8:
+                    st.warning(f"**{label_disp}:** {disponivel_atual} dias")
                 else:
-                    st.warning(mensagem_dias)
+                    st.success(f"**{label_disp}:** {disponivel_atual} dias")
 
 
 def tab_gestao_usuarios():

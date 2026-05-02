@@ -17,8 +17,15 @@ pyinstaller ^
   --name AgendadorFerias ^
   --onefile ^
   --collect-data streamlit ^
+  --collect-all streamlit_calendar ^
+  --collect-submodules streamlit ^
   --copy-metadata streamlit ^
   --hidden-import streamlit.web.cli ^
+  --hidden-import streamlit_calendar ^
+  --hidden-import main ^
+  --hidden-import bd_crud ^
+  --hidden-import envio_email ^
+  --hidden-import app_paths ^
   --add-data "main.py;." ^
   --add-data "bd_crud.py;." ^
   --add-data "envio_email.py;." ^
@@ -26,6 +33,7 @@ pyinstaller ^
   --add-data "calendar_options.json;." ^
   --add-data "wave.png;." ^
   --add-data "bd_usuarios.sqlite;." ^
+  --add-data ".venv\Lib\site-packages\streamlit_calendar\frontend\build;streamlit_calendar\frontend\build" ^
   launcher.py
 
 echo.

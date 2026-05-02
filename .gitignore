@@ -5,6 +5,7 @@ __pycache__/
 .env
 .vscode/
 .idea/
+.streamlit/secrets.toml
 build/
 dist/
 *.exe

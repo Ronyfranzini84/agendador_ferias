@@ -39,7 +39,7 @@ O app permite:
 
 Na area `Gerenciar Usuarios`, o gestor pode:
 
-- visualizar todos os usuarios cadastrados;
+- visualizar todos os usuarios cadastrados com comparativo de uso de ferias por ano;
 - criar novos usuarios;
 - modificar nome, e-mail, senha, setor, data de inicio e acesso de gestor;
 - deletar usuarios.
@@ -53,6 +53,7 @@ Na aba `E-mail`, o gestor pode:
 - enviar por `SMTP`;
 - tentar envio por `Outlook Desktop` quando configurado na maquina;
 - configurar login SMTP, host, porta e TLS.
+- gerar sugestao de assunto e mensagem com IA (Groq), mantendo revisao humana antes do envio.
 
 Os dominios `grupocasasbahia.com.br`, `viavarejo.com.br` e `casasbahia.com.br` usam Office 365 como configuracao padrao de SMTP.
 
@@ -66,6 +67,7 @@ O dashboard gerencial mostra:
 - consolidado de ferias agendadas por mes;
 - pessoas com saldo insuficiente para novas ferias;
 - setores com maior concentracao de ausencias.
+- insight executivo com IA (Groq), com diagnostico e recomendacoes de acao.
 
 Esse painel ajuda a antecipar concentracoes de ausencia e reduzir risco de absenteismo por setor.
 
@@ -74,7 +76,21 @@ Esse painel ajuda a antecipar concentracoes de ausencia e reduzir risco de absen
 - Ferias exigem periodo minimo de 10 dias.
 - A data final deve ser igual ou posterior a data inicial.
 - O sistema valida saldo disponivel antes de registrar ferias.
-- O saldo e calculado com base no tempo de empresa menos os dias de ferias ja utilizados.
+- O saldo e calculado por ano calendario com proporcionalidade:
+  - Ano de entrada: proporcional aos dias trabalhados no ano.
+  - Primeiro ano completo: proporcional ao periodo a partir do aniversario de empresa.
+  - Segundo ano completo em diante: 30 dias fixos.
+
+### Comparativo anual de ferias
+
+A tela `Gerenciar Usuarios` exibe, para cada funcionario:
+
+- dias usados no ano anterior;
+- dias usados no ano atual (com delta em relacao ao ano anterior);
+- dias disponiveis no ano atual com indicador visual:
+  - verde: uso dentro do esperado;
+  - amarelo: muitos dias ainda disponiveis (risco de acumulo);
+  - vermelho: saldo critico (menos de 10 dias disponiveis).
 
 ## Dados e persistencia
 
@@ -122,3 +138,17 @@ Para usuarios com acesso de gestor, a tela principal oferece:
 - `calendar_options.json` e `wave.png` vao empacotados junto no build.
 - O executavel precisa ficar aberto no laptop servidor para os outros usuarios acessarem o link.
 - O build atual usa PyInstaller com metadados do `streamlit` incluidos para permitir a inicializacao correta do executavel.
+
+## IA com Groq (opcional)
+
+Para habilitar os recursos de IA no formulario de e-mail e no dashboard, configure a chave da Groq na variavel de ambiente abaixo:
+
+- `GROQ_API_KEY`
+
+Exemplo no PowerShell (sessao atual):
+
+```powershell
+$env:GROQ_API_KEY = "sua_chave_aqui"
+```
+
+Se a chave nao estiver configurada, o sistema continua funcionando normalmente sem os recursos de IA.

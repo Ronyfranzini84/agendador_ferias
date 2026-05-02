@@ -108,7 +108,6 @@ class UsuarioFerias(Base):
         return lista_eventos
     
     def dias_para_solicitar(self):
-
         total_dias = (
             datetime.now() - datetime.strptime(self.inicio_na_empresa, DATE_FORMAT)
         ).days * (30 / 365)
@@ -117,6 +116,51 @@ class UsuarioFerias(Base):
             if evento.tipo == TIPO_FERIAS:
                 dias_tirados += evento.total_dias
         return int(total_dias - dias_tirados)
+
+    def dias_por_ano(self, ano=None):
+        """Retorna (direito, tirados, disponivel) para um ano calendario especifico.
+
+        Regra simplificada (ano calendário):
+        - Ano de entrada: proporcional aos dias restantes no ano a partir do início
+        - Ano seguinte ao de entrada: proporcional ao tempo completo no ano
+          (ex.: entrou em mai/2025 → em 2026 tem direito a ~(365-dias de 2025 restantes)*30/365)
+        - A partir do 2o ano completo: 30 dias fixos
+        """
+        if ano is None:
+            ano = datetime.now().year
+
+        inicio = datetime.strptime(self.inicio_na_empresa, DATE_FORMAT)
+        if inicio.year > ano:
+            return (0, 0, 0)
+
+        if inicio.year == ano:
+            # Ano de entrada: proporcional ao que trabalhou no ano
+            fim_ano = datetime(ano, 12, 31)
+            dias_trabalhados_no_ano = (fim_ano - inicio).days + 1
+            direito = int(dias_trabalhados_no_ano * 30 / 365)
+        elif inicio.year == ano - 1:
+            # Primeiro ano completo: proporcional baseado no período aquisitivo
+            # O funcionário completa 1 ano na empresa em algum ponto deste ano.
+            # Direito = fração do ano que já trabalhou antes de iniciar o período concessivo
+            aniversario = inicio.replace(year=ano)
+            inicio_ano = datetime(ano, 1, 1)
+            # Dias que faltam do aniversário até o fim do ano = período em que tem direito cheio
+            # Antes do aniversário = ainda no período aquisitivo do 1o ano
+            dias_com_direito = (datetime(ano, 12, 31) - aniversario).days + 1
+            direito = int(dias_com_direito * 30 / 365)
+        else:
+            # 2o ano completo em diante: 30 dias
+            direito = 30
+
+        tirados = 0
+        for evento in self.eventos_ferias:
+            if evento.tipo == TIPO_FERIAS:
+                ano_evento = datetime.strptime(evento.inicio_ferias, DATE_FORMAT).year
+                if ano_evento == ano:
+                    tirados += evento.total_dias
+
+        disponivel = max(0, direito - tirados)
+        return (direito, tirados, disponivel)
     
 
 class EventosFerias(Base):
