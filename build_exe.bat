@@ -26,10 +26,15 @@ pyinstaller ^
   --hidden-import bd_crud ^
   --hidden-import envio_email ^
   --hidden-import app_paths ^
+  --hidden-import groq_ai ^
+  --hidden-import calendar_component ^
+  --hidden-import groq ^
   --add-data "main.py;." ^
   --add-data "bd_crud.py;." ^
   --add-data "envio_email.py;." ^
   --add-data "app_paths.py;." ^
+  --add-data "groq_ai.py;." ^
+  --add-data "calendar_component.py;." ^
   --add-data "calendar_options.json;." ^
   --add-data "wave.png;." ^
   --add-data "bd_usuarios.sqlite;." ^

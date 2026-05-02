@@ -19,9 +19,13 @@ O app permite:
 ### Usuario comum
 
 - Acesso por login com nome e senha.
-- Visualizacao do saldo de dias disponiveis para solicitar ferias.
+- Visualizacao do saldo de dias disponiveis para solicitar ferias (saldo do ano atual).
 - Selecao de datas diretamente no calendario.
 - Registro de ferias pelo proprio usuario.
+- Opcao de fracionamento no momento da solicitacao:
+  - Fracionar: `Sim` ou `Nao`.
+  - Planos disponiveis quando fracionar: `10 + 10 + 10`, `10 + 20`, `15 + 15`.
+  - Se escolher `Nao` e solicitar `15` ou `20` dias, o sistema considera consumo de `30` dias (regra de venda do restante).
 - Visualizacao, na tela inicial, do link da rede local para acesso ao sistema hospedado na empresa.
 
 ### Gestor
@@ -76,10 +80,14 @@ Esse painel ajuda a antecipar concentracoes de ausencia e reduzir risco de absen
 - Ferias exigem periodo minimo de 10 dias.
 - A data final deve ser igual ou posterior a data inicial.
 - O sistema valida saldo disponivel antes de registrar ferias.
+- O saldo para solicitacao considera o ano atual (nao acumula todo o historico da empresa).
 - O saldo e calculado por ano calendario com proporcionalidade:
   - Ano de entrada: proporcional aos dias trabalhados no ano.
   - Primeiro ano completo: proporcional ao periodo a partir do aniversario de empresa.
   - Segundo ano completo em diante: 30 dias fixos.
+- Em ferias, o sistema diferencia dias de periodo e dias consumidos:
+  - Com fracionamento: consumo igual ao periodo solicitado.
+  - Sem fracionamento, em pedidos de 15 ou 20 dias: consumo de 30 dias.
 
 ### Comparativo anual de ferias
 

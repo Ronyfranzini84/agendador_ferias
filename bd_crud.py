@@ -66,17 +66,19 @@ class UsuarioFerias(Base):
     def verifica_senha(self, senha):
         return check_password_hash(self.senha, senha)
     
-    def adiciona_ferias(self, inicio_ferias, fim_ferias, tipo=TIPO_FERIAS):
+    def adiciona_ferias(self, inicio_ferias, fim_ferias, tipo=TIPO_FERIAS, dias_consumidos=None):
         total_dias = (
             datetime.strptime(fim_ferias, DATE_FORMAT)
             - datetime.strptime(inicio_ferias, DATE_FORMAT)
         ).days + 1
+        dias_consumidos_evento = total_dias if dias_consumidos is None else int(dias_consumidos)
         with Session(bind=engine) as session:
             ferias = EventosFerias(
                 parent_id=self.id,
                 inicio_ferias=inicio_ferias,
                 fim_ferias=fim_ferias,
                 total_dias=total_dias,
+                dias_consumidos=dias_consumidos_evento,
                 tipo=tipo,
             )
             session.add(ferias)
@@ -101,6 +103,7 @@ class UsuarioFerias(Base):
                     "usuario_id": self.id,
                     "usuario_nome": self.nome,
                     "total_dias": evento.total_dias,
+                    "dias_consumidos": evento.dias_consumidos,
                     "tipo": evento.tipo,
                     "recurso_id": self.recurso_id or "sem-equipe",
                 },
@@ -108,14 +111,8 @@ class UsuarioFerias(Base):
         return lista_eventos
     
     def dias_para_solicitar(self):
-        total_dias = (
-            datetime.now() - datetime.strptime(self.inicio_na_empresa, DATE_FORMAT)
-        ).days * (30 / 365)
-        dias_tirados = 0
-        for evento in self.eventos_ferias:
-            if evento.tipo == TIPO_FERIAS:
-                dias_tirados += evento.total_dias
-        return int(total_dias - dias_tirados)
+        # Saldo atual segue a mesma regra anual exibida para o gestor.
+        return self.dias_por_ano(datetime.now().year)[2]
 
     def dias_por_ano(self, ano=None):
         """Retorna (direito, tirados, disponivel) para um ano calendario especifico.
@@ -157,7 +154,7 @@ class UsuarioFerias(Base):
             if evento.tipo == TIPO_FERIAS:
                 ano_evento = datetime.strptime(evento.inicio_ferias, DATE_FORMAT).year
                 if ano_evento == ano:
-                    tirados += evento.total_dias
+                    tirados += evento.dias_consumidos
 
         disponivel = max(0, direito - tirados)
         return (direito, tirados, disponivel)
@@ -172,6 +169,7 @@ class EventosFerias(Base):
     inicio_ferias: Mapped[str] = mapped_column(String(30), nullable=False)
     fim_ferias: Mapped[str] = mapped_column(String(30), nullable=False)
     total_dias: Mapped[int] = mapped_column(Integer(), nullable=False)
+    dias_consumidos: Mapped[int] = mapped_column(Integer(), nullable=False, default=0)
     tipo: Mapped[str] = mapped_column(String(30), nullable=False, default=TIPO_FERIAS)
     
 
@@ -191,6 +189,14 @@ def _garantir_colunas_db():
             conexao.exec_driver_sql(
                 "ALTER TABLE eventos_ferias ADD COLUMN tipo VARCHAR(30) NOT NULL DEFAULT 'ferias'"
             )
+        if "dias_consumidos" not in colunas_evento:
+            conexao.exec_driver_sql(
+                "ALTER TABLE eventos_ferias ADD COLUMN dias_consumidos INTEGER NOT NULL DEFAULT 0"
+            )
+
+        conexao.exec_driver_sql(
+            "UPDATE eventos_ferias SET dias_consumidos = total_dias WHERE dias_consumidos IS NULL OR dias_consumidos <= 0"
+        )
 
 
 _garantir_colunas_db()
@@ -275,7 +281,7 @@ def deletar_usuario(id):
         session.commit()
 
 
-def atualizar_ferias(ferias_id, inicio_ferias, fim_ferias, tipo=TIPO_FERIAS):
+def atualizar_ferias(ferias_id, inicio_ferias, fim_ferias, tipo=TIPO_FERIAS, dias_consumidos=None):
     with Session(bind=engine) as session:
         ferias = _buscar_ferias(session, ferias_id)
         if ferias is None:
@@ -291,6 +297,7 @@ def atualizar_ferias(ferias_id, inicio_ferias, fim_ferias, tipo=TIPO_FERIAS):
         ferias.inicio_ferias = inicio_normalizado
         ferias.fim_ferias = fim_normalizado
         ferias.total_dias = total_dias
+        ferias.dias_consumidos = total_dias if dias_consumidos is None else int(dias_consumidos)
         ferias.tipo = tipo
         session.commit()
         return ferias
