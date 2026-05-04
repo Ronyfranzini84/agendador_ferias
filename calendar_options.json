@@ -24,5 +24,9 @@
         "resourceTimelineMonth": "Lista"
     },
     "initialView": "dayGridMonth",
-    "locale": "pt-br"
+    "locale": "pt-br",
+    "validRange": {
+        "start": "2010-01-01",
+        "end": "2100-12-31"
+    }
 }

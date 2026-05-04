@@ -3,7 +3,7 @@ import os
 import re
 import socket
 import unicodedata
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 import pandas as pd
@@ -1215,7 +1215,7 @@ def tab_gestao_usuarios():
                 format_func=lambda valor: nome_recurso_por_id(valor, recursos_por_id, calendar_options),
                 key="criar_recurso_id",
             )
-            inicio_na_empresa = st.date_input("Início na empresa", key="criar_inicio_empresa", format="DD/MM/YYYY")
+            inicio_na_empresa = st.date_input("Início na empresa", key="criar_inicio_empresa", format="DD/MM/YYYY", min_value=date(2010, 1, 1), max_value=date(2100, 12, 31))
             senha = st.text_input("Senha", type="password", key="criar_senha")
             criar = st.form_submit_button("Criar Usuário", use_container_width=True)
 
@@ -1272,6 +1272,8 @@ def tab_gestao_usuarios():
                         "Início na empresa",
                         key="mod_inicio_empresa",
                         format="DD/MM/YYYY",
+                        min_value=date(2000, 1, 1),
+                        max_value=date(2100, 12, 31),
                     )
                     senha = st.text_input(
                         "Nova senha",
