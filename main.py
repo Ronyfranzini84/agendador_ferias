@@ -57,6 +57,7 @@ CHAVE_LISTA_TIPO = "gestor_lista_tipo"
 CHAVE_USUARIO_MOD_EM_EDICAO = "mod_usuario_id_atual"
 CHAVE_MENSAGEM_RODAPE = "mensagem_rodape"
 CHAVE_EMAIL_DESTINATARIO = "email_destinatario_usuario"
+CHAVE_API_GROQ_USUARIO = "groq_api_key_usuario"
 PORTA_APP = 8501
 
 st.image(str(caminho_recurso("wave.png")), use_container_width=True)
@@ -93,6 +94,10 @@ def definir_mensagem_rodape(tipo, texto):
 
 
 def obter_chave_api_groq_streamlit():
+    chave_sessao = str(st.session_state.get(CHAVE_API_GROQ_USUARIO, "")).strip()
+    if chave_sessao:
+        return chave_sessao
+
     chave_env = os.getenv("GROQ_API_KEY", "").strip()
     if chave_env:
         return chave_env
@@ -590,6 +595,7 @@ def renderizar_tab_envio_email(usuarios):
     st.session_state.setdefault("email_usuario_smtp", gestor.email)
     st.session_state.setdefault("email_tom_ia", "Profissional e cordial")
     st.session_state.setdefault("email_objetivo_ia", "")
+    st.session_state.setdefault(CHAVE_API_GROQ_USUARIO, obter_chave_api_groq_streamlit())
 
     assunto_pendente = st.session_state.pop("email_assunto_pendente", None)
     mensagem_pendente = st.session_state.pop("email_mensagem_pendente", None)
@@ -646,6 +652,12 @@ def renderizar_tab_envio_email(usuarios):
         objetivo_ia = st.text_input(
             "Objetivo opcional para IA (ex: confirmar periodo de ferias)",
             key="email_objetivo_ia",
+        )
+        st.text_input(
+            "Chave API Groq (IA do e-mail e Dashboard)",
+            key=CHAVE_API_GROQ_USUARIO,
+            type="password",
+            help="Se ficar em branco, o app tenta usar GROQ_API_KEY do ambiente ou do secrets.",
         )
         senha = ""
         smtp_host = None
