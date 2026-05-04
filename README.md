@@ -31,6 +31,7 @@ O app permite:
 ### Gestor
 
 - Acesso ao calendario completo da equipe.
+- Navegacao no calendario de `01/01/2010` ate `31/12/2100`.
 - Cadastro de ocorrencias dos tipos:
 	- Ferias
 	- Folga
@@ -48,6 +49,8 @@ Na area `Gerenciar Usuarios`, o gestor pode:
 - modificar nome, e-mail, senha, setor, data de inicio e acesso de gestor;
 - deletar usuarios.
 
+O campo `Inicio na empresa` aceita datas de `01/01/2010` ate `31/12/2100`.
+
 ### Envio de e-mail
 
 Na aba `E-mail`, o gestor pode:
@@ -56,8 +59,11 @@ Na aba `E-mail`, o gestor pode:
 - usar o e-mail de um funcionario cadastrado como preenchimento rapido;
 - enviar por `SMTP`;
 - tentar envio por `Outlook Desktop` quando configurado na maquina;
-- configurar login SMTP, host, porta e TLS.
-- gerar sugestao de assunto e mensagem com IA (Groq), mantendo revisao humana antes do envio.
+- configurar login SMTP, host, porta e TLS;
+- gerar sugestao de assunto e mensagem com IA (Groq), mantendo revisao humana antes do envio;
+- informar a chave API da Groq diretamente no formulario, sem necessidade de variavel de ambiente.
+
+A chave API informada na aba `E-mail` e compartilhada automaticamente com o Dashboard para geração do insight executivo.
 
 Os dominios `grupocasasbahia.com.br`, `viavarejo.com.br` e `casasbahia.com.br` usam Office 365 como configuracao padrao de SMTP.
 
@@ -70,7 +76,7 @@ O dashboard gerencial mostra:
 - setor com maior impacto no periodo futuro;
 - consolidado de ferias agendadas por mes;
 - pessoas com saldo insuficiente para novas ferias;
-- setores com maior concentracao de ausencias.
+- setores com maior concentracao de ausencias;
 - insight executivo com IA (Groq), com diagnostico e recomendacoes de acao.
 
 Esse painel ajuda a antecipar concentracoes de ausencia e reduzir risco de absenteismo por setor.
@@ -149,9 +155,13 @@ Para usuarios com acesso de gestor, a tela principal oferece:
 
 ## IA com Groq (opcional)
 
-Para habilitar os recursos de IA no formulario de e-mail e no dashboard, configure a chave da Groq na variavel de ambiente abaixo:
+Os recursos de IA (geracao de rascunho de e-mail e insight do dashboard) sao ativados informando a chave da Groq diretamente na aba `E-mail` do formulario do gestor.
 
-- `GROQ_API_KEY`
+A chave e armazenada apenas na sessao atual e e compartilhada automaticamente com o Dashboard. Nao e necessario reiniciar o app.
+
+Como alternativa, a chave pode ser configurada via variavel de ambiente ou secrets:
+
+- Variavel de ambiente: `GROQ_API_KEY`
 
 Exemplo no PowerShell (sessao atual):
 
@@ -159,4 +169,9 @@ Exemplo no PowerShell (sessao atual):
 $env:GROQ_API_KEY = "sua_chave_aqui"
 ```
 
-Se a chave nao estiver configurada, o sistema continua funcionando normalmente sem os recursos de IA.
+Ordem de prioridade de leitura da chave:
+1. Campo digitado na aba `E-mail` (sessao atual)
+2. Variavel de ambiente `GROQ_API_KEY`
+3. `st.secrets` (para deploy em Streamlit Cloud)
+
+Se nenhuma chave estiver configurada, o sistema continua funcionando normalmente sem os recursos de IA.
