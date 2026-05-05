@@ -3,6 +3,7 @@ import os
 import re
 import socket
 import unicodedata
+from collections import Counter
 from datetime import datetime, date
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from bd_crud import (
     criar_usuario,
     deletar_ferias,
     deletar_usuario,
+    ler_usuario_por_id,
     ler_todos_usuarios,
     modificar_usuario,
 )
@@ -48,6 +50,8 @@ CHAVE_FERIAS_GESTOR = "gestor_ferias_id"
 CHAVE_EDITOR_DATA_INICIO = "gestor_editor_data_inicio"
 CHAVE_EDITOR_DATA_FIM = "gestor_editor_data_fim"
 CHAVE_EDITOR_TIPO = "gestor_editor_tipo"
+CHAVE_EDITOR_FRACIONAR = "gestor_editor_fracionar"
+CHAVE_EDITOR_PLANO = "gestor_editor_plano"
 CHAVE_LISTA_RECURSO = "gestor_lista_recurso"
 CHAVE_LISTA_SETOR_FORM = "gestor_setor_form"
 CHAVE_LISTA_DATA_INICIO = "gestor_lista_data_inicio"
@@ -59,6 +63,12 @@ CHAVE_MENSAGEM_RODAPE = "mensagem_rodape"
 CHAVE_EMAIL_DESTINATARIO = "email_destinatario_usuario"
 CHAVE_API_GROQ_USUARIO = "groq_api_key_usuario"
 PORTA_APP = 8501
+PERIODOS_FERIAS_PERMITIDOS = {10, 15, 20, 30}
+PLANOS_FRACIONAMENTO = {
+    "10 + 10 + 10": Counter({10: 3}),
+    "10 + 20": Counter({10: 1, 20: 1}),
+    "15 + 15": Counter({15: 2}),
+}
 
 st.image(str(caminho_recurso("wave.png")), use_container_width=True)
 
@@ -214,6 +224,19 @@ def renderizar_assinatura():
         """,
         unsafe_allow_html=True,
     )
+
+
+def usuario_logado_atualizado():
+    usuario_sessao = st.session_state.get(CHAVE_USUARIO)
+    if usuario_sessao is None:
+        return None
+
+    usuario_atualizado = ler_usuario_por_id(usuario_sessao.id)
+    if usuario_atualizado is not None:
+        st.session_state[CHAVE_USUARIO] = usuario_atualizado
+        return usuario_atualizado
+
+    return usuario_sessao
 
 
 def renderizar_mensagem_rodape():
@@ -516,6 +539,8 @@ def limpar_gestao_ferias():
         CHAVE_EDITOR_DATA_INICIO,
         CHAVE_EDITOR_DATA_FIM,
         CHAVE_EDITOR_TIPO,
+        CHAVE_EDITOR_FRACIONAR,
+        CHAVE_EDITOR_PLANO,
         CHAVE_LISTA_RECURSO,
         CHAVE_LISTA_SETOR_FORM,
         CHAVE_LISTA_DATA_INICIO,
@@ -798,15 +823,112 @@ def calcular_dias_consumidos_ferias(total_dias, fracionar_ferias):
 
 
 def dias_validos_por_plano_fracionamento(plano):
-    opcoes = {
-        "10 + 10 + 10": {10},
-        "10 + 20": {10, 20},
-        "15 + 15": {15},
-    }
-    return opcoes.get(plano, set())
+    return set(PLANOS_FRACIONAMENTO.get(plano, Counter()).keys())
 
 
-def validar_periodo_ferias(usuario, data_inicio, data_fim, dias_ja_reservados=0, dias_consumidos=None):
+def periodos_ferias_do_ano(usuario, ano, evento_id_ignorar=None):
+    periodos = []
+    for evento in usuario.lista_ferias():
+        dados_evento = evento.get("extendedProps", {})
+        if dados_evento.get("tipo") != TIPO_FERIAS:
+            continue
+
+        if evento_id_ignorar is not None and str(evento.get("id")) == str(evento_id_ignorar):
+            continue
+
+        data_inicio_evento = evento.get("start")
+        if not data_inicio_evento:
+            continue
+
+        if datetime.strptime(data_inicio_evento, FORMATO_DATA).year != ano:
+            continue
+
+        periodos.append(int(dados_evento.get("total_dias", 0)))
+
+    return periodos
+
+
+def plano_fracionamento_parcial_valido(periodos_existentes, plano_fracionamento, total_dias_atual):
+    plano = PLANOS_FRACIONAMENTO.get(plano_fracionamento)
+    if not plano:
+        return False
+
+    periodos_planejados = Counter(periodos_existentes)
+    periodos_planejados.update([int(total_dias_atual)])
+    return all(periodos_planejados[dias] <= plano[dias] for dias in periodos_planejados)
+
+
+def planos_fracionamento_compativeis(periodos):
+    periodos_planejados = Counter(int(periodo) for periodo in periodos)
+    planos = []
+    for nome_plano, configuracao in PLANOS_FRACIONAMENTO.items():
+        if all(periodos_planejados[dias] <= configuracao[dias] for dias in periodos_planejados):
+            planos.append(nome_plano)
+    return planos
+
+
+def validar_configuracao_ferias(
+    usuario,
+    ano_referencia,
+    total_dias,
+    fracionar_ferias,
+    plano_fracionamento=None,
+    evento_id_ignorar=None,
+):
+    if total_dias > 30:
+        definir_mensagem_rodape("error", "O período máximo de férias por solicitação é de 30 dias.")
+        return False
+
+    if total_dias not in PERIODOS_FERIAS_PERMITIDOS:
+        definir_mensagem_rodape(
+            "error",
+            "Os períodos de férias permitidos são de 10, 15, 20 ou 30 dias.",
+        )
+        return False
+
+    periodos_existentes = periodos_ferias_do_ano(usuario, ano_referencia, evento_id_ignorar=evento_id_ignorar)
+
+    if fracionar_ferias:
+        if not plano_fracionamento:
+            definir_mensagem_rodape("error", "Selecione um plano de fracionamento para registrar as férias.")
+            return False
+
+        if not plano_fracionamento_parcial_valido(periodos_existentes, plano_fracionamento, total_dias):
+            definir_mensagem_rodape(
+                "error",
+                f"O período de {total_dias} dias não é compatível com o plano {plano_fracionamento} e com as férias já registradas neste ano.",
+            )
+            return False
+
+        return True
+
+    if periodos_existentes:
+        definir_mensagem_rodape(
+            "error",
+            "Já existem férias registradas neste ano. Para complementar o saldo, use um plano de fracionamento compatível.",
+        )
+        return False
+
+    if total_dias not in {15, 20, 30}:
+        definir_mensagem_rodape(
+            "error",
+            "Sem fracionamento, os períodos permitidos são de 15, 20 ou 30 dias.",
+        )
+        return False
+
+    return True
+
+
+def validar_periodo_ferias(
+    usuario,
+    data_inicio,
+    data_fim,
+    dias_ja_reservados=0,
+    dias_consumidos=None,
+    fracionar_ferias=False,
+    plano_fracionamento=None,
+    evento_id_ignorar=None,
+):
     data_inicio_iso = converter_data_iso(data_inicio)
     data_fim_iso = converter_data_iso(data_fim)
     total_dias = (
@@ -822,8 +944,27 @@ def validar_periodo_ferias(usuario, data_inicio, data_fim, dias_ja_reservados=0,
         definir_mensagem_rodape("error", "O período mínimo para solicitar férias é de 10 dias.")
         return None
 
+    ano_inicio = datetime.strptime(data_inicio_iso, FORMATO_DATA).year
+    ano_fim = datetime.strptime(data_fim_iso, FORMATO_DATA).year
+    if ano_inicio != ano_fim:
+        definir_mensagem_rodape(
+            "error",
+            "As férias devem ser registradas dentro do mesmo ano para manter o saldo anual correto.",
+        )
+        return None
+
+    if not validar_configuracao_ferias(
+        usuario,
+        ano_inicio,
+        total_dias,
+        fracionar_ferias,
+        plano_fracionamento=plano_fracionamento,
+        evento_id_ignorar=evento_id_ignorar,
+    ):
+        return None
+
     dias_para_validacao = total_dias if dias_consumidos is None else int(dias_consumidos)
-    dias_disponiveis = usuario.dias_para_solicitar() + dias_ja_reservados
+    dias_disponiveis = usuario.dias_por_ano(ano_inicio)[2] + dias_ja_reservados
     if dias_disponiveis < dias_para_validacao:
         mensagem_consumo = ""
         if dias_para_validacao != total_dias:
@@ -837,7 +978,17 @@ def validar_periodo_ferias(usuario, data_inicio, data_fim, dias_ja_reservados=0,
     return data_inicio_iso, data_fim_iso, total_dias
 
 
-def validar_periodo_ocorrencia(usuario, data_inicio, data_fim, tipo, dias_ja_reservados=0, dias_consumidos=None):
+def validar_periodo_ocorrencia(
+    usuario,
+    data_inicio,
+    data_fim,
+    tipo,
+    dias_ja_reservados=0,
+    dias_consumidos=None,
+    fracionar_ferias=False,
+    plano_fracionamento=None,
+    evento_id_ignorar=None,
+):
     if tipo == TIPO_FERIAS:
         return validar_periodo_ferias(
             usuario,
@@ -845,6 +996,9 @@ def validar_periodo_ocorrencia(usuario, data_inicio, data_fim, tipo, dias_ja_res
             data_fim,
             dias_ja_reservados=dias_ja_reservados,
             dias_consumidos=dias_consumidos,
+            fracionar_ferias=fracionar_ferias,
+            plano_fracionamento=plano_fracionamento,
+            evento_id_ignorar=evento_id_ignorar,
         )
 
     data_inicio_iso = converter_data_iso(data_inicio)
@@ -859,6 +1013,109 @@ def validar_periodo_ocorrencia(usuario, data_inicio, data_fim, tipo, dias_ja_res
         return None
 
     return data_inicio_iso, data_fim_iso, total_dias
+
+
+def renderizar_resumo_solicitacao(usuario):
+    data_inicio = st.session_state.get(CHAVE_DATA_INICIO)
+    data_fim = st.session_state.get(CHAVE_DATA_FINAL)
+
+    ano_referencia = datetime.now().year
+    if data_inicio:
+        ano_referencia = datetime.strptime(converter_data_iso(data_inicio), FORMATO_DATA).year
+
+    dias_disponiveis = usuario.dias_por_ano(ano_referencia)[2]
+
+    with st.expander("Dias para solicitar"):
+        st.markdown(
+            f"O funcionário {usuario.nome} possui {dias_disponiveis} dias disponíveis para solicitar em {ano_referencia}."
+        )
+
+        if not data_inicio:
+            st.caption("Selecione a data inicial e depois a data final no calendário para ver a prévia do consumo.")
+            return
+
+        st.caption(f"Data inicial em seleção: {formatar_data_br(data_inicio)}")
+
+        if not data_fim:
+            st.caption("Aguardando a data final para calcular o consumo previsto.")
+            return
+
+        data_inicio_iso = converter_data_iso(data_inicio)
+        data_fim_iso = converter_data_iso(data_fim)
+        total_dias = (
+            datetime.strptime(data_fim_iso, FORMATO_DATA)
+            - datetime.strptime(data_inicio_iso, FORMATO_DATA)
+        ).days + 1
+
+        fracionar_ferias = st.session_state.get(CHAVE_FRACIONAR_FERIAS, "Não") == "Sim"
+        dias_consumidos = calcular_dias_consumidos_ferias(total_dias, fracionar_ferias)
+        saldo_restante = dias_disponiveis - dias_consumidos
+
+        st.markdown(f"Período selecionado: {formatar_data_br(data_inicio_iso)} até {formatar_data_br(data_fim_iso)}")
+        st.markdown(f"Dias marcados: {total_dias}")
+        st.markdown(f"Dias consumidos por esta solicitação: {dias_consumidos}")
+
+        if saldo_restante >= 0:
+            st.success(f"Saldo restante após confirmar: {saldo_restante} dias")
+        else:
+            st.error(f"Saldo restante após confirmar: {saldo_restante} dias")
+
+
+def renderizar_controles_solicitacao(usuario):
+    data_inicio = st.session_state.get(CHAVE_DATA_INICIO)
+    data_fim = st.session_state.get(CHAVE_DATA_FINAL)
+
+    if not data_inicio:
+        return
+
+    cols = st.columns([0.7, 0.3])
+    with cols[0]:
+        st.warning(f"Data início selecionada: {formatar_data_br(data_inicio)}")
+    with cols[1]:
+        st.button("Limpar", use_container_width=True, on_click=limpar_datas)
+
+    if not data_fim:
+        return
+
+    total_dias_selecionado = (
+        datetime.strptime(converter_data_iso(data_fim), FORMATO_DATA)
+        - datetime.strptime(converter_data_iso(data_inicio), FORMATO_DATA)
+    ).days + 1
+    ano_selecionado = datetime.strptime(converter_data_iso(data_inicio), FORMATO_DATA).year
+    periodos_existentes_usuario = periodos_ferias_do_ano(usuario, ano_selecionado)
+    planos_compativeis_usuario = planos_fracionamento_compativeis(
+        periodos_existentes_usuario + [total_dias_selecionado]
+    )
+
+    cols = st.columns([0.7, 0.3])
+    with cols[0]:
+        st.warning(f"Data final selecionada: {formatar_data_br(data_fim)}")
+    with cols[1]:
+        fracionar_ferias = st.radio(
+            "Fracionar férias?",
+            options=("Sim", "Não"),
+            horizontal=True,
+            index=1,
+            key=CHAVE_FRACIONAR_FERIAS,
+        ) == "Sim"
+
+        plano_fracionamento = None
+        if fracionar_ferias:
+            if planos_compativeis_usuario:
+                plano_fracionamento = st.selectbox(
+                    "Plano de fracionamento",
+                    options=planos_compativeis_usuario,
+                    key=CHAVE_PLANO_FRACIONAMENTO,
+                )
+            else:
+                st.caption("O período selecionado não é compatível com fracionamento.")
+
+        st.button(
+            "Adicionar férias",
+            use_container_width=True,
+            on_click=verifica_adiciona_ferias,
+            args=(data_inicio, data_fim, fracionar_ferias, plano_fracionamento),
+        )
 
 
 def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, calendar_options):
@@ -883,6 +1140,14 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
             )
 
             tipos_ocorrencia = list(TIPOS_OCORRENCIA.keys())
+            ano_evento = datetime.strptime(evento["start"], FORMATO_DATA).year
+            periodos_sem_evento = periodos_ferias_do_ano(usuario_alvo, ano_evento, evento_id_ignorar=evento_id)
+            planos_compativeis_edicao = planos_fracionamento_compativeis(periodos_sem_evento + [dados_evento["total_dias"]])
+            fracionar_padrao = (
+                dados_evento["tipo"] == TIPO_FERIAS
+                and dados_evento.get("dias_consumidos", dados_evento["total_dias"]) == dados_evento["total_dias"]
+                and dados_evento["total_dias"] != 30
+            )
             with st.form("form_gerenciar_ferias"):
                 tipo_ocorrencia = st.selectbox(
                     "Tipo de ocorrência",
@@ -903,6 +1168,23 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
                     key=CHAVE_EDITOR_DATA_FIM,
                     format="DD/MM/YYYY",
                 )
+                fracionar_edicao = False
+                plano_fracionamento_edicao = None
+                if tipo_ocorrencia == TIPO_FERIAS:
+                    fracionar_edicao = st.radio(
+                        "Fracionar férias?",
+                        options=("Sim", "Não"),
+                        horizontal=True,
+                        index=0 if fracionar_padrao else 1,
+                        key=CHAVE_EDITOR_FRACIONAR,
+                    ) == "Sim"
+                    if fracionar_edicao:
+                        opcoes_plano_edicao = planos_compativeis_edicao or list(PLANOS_FRACIONAMENTO.keys())
+                        plano_fracionamento_edicao = st.selectbox(
+                            "Plano de fracionamento",
+                            options=opcoes_plano_edicao,
+                            key=CHAVE_EDITOR_PLANO,
+                        )
                 col_alterar, col_limpar = st.columns(2)
                 with col_alterar:
                     alterar = st.form_submit_button("Alterar ocorrência", use_container_width=True)
@@ -910,6 +1192,14 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
                     limpar = st.form_submit_button("Limpar ocorrência", use_container_width=True)
 
             if alterar:
+                dias_consumidos_edicao = None
+                if tipo_ocorrencia == TIPO_FERIAS:
+                    total_dias_edicao = (
+                        datetime.strptime(converter_data_iso(nova_data_fim), FORMATO_DATA)
+                        - datetime.strptime(converter_data_iso(nova_data_inicio), FORMATO_DATA)
+                    ).days + 1
+                    dias_consumidos_edicao = calcular_dias_consumidos_ferias(total_dias_edicao, fracionar_edicao)
+
                 periodo_validado = validar_periodo_ocorrencia(
                     usuario_alvo,
                     nova_data_inicio,
@@ -918,6 +1208,10 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
                     dias_ja_reservados=dados_evento.get("dias_consumidos", dados_evento["total_dias"])
                     if dados_evento["tipo"] == TIPO_FERIAS
                     else 0,
+                    dias_consumidos=dias_consumidos_edicao,
+                    fracionar_ferias=fracionar_edicao,
+                    plano_fracionamento=plano_fracionamento_edicao,
+                    evento_id_ignorar=evento_id,
                 )
                 if periodo_validado is not None:
                     data_inicio_iso, data_fim_iso, _ = periodo_validado
@@ -926,6 +1220,7 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
                         data_inicio_iso,
                         data_fim_iso,
                         tipo=tipo_ocorrencia,
+                        dias_consumidos=dias_consumidos_edicao,
                     )
                     definir_mensagem_rodape("success", "Ocorrência alterada com sucesso.")
                     limpar_gestao_ferias()
@@ -1046,18 +1341,29 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
             fracionar_lista = False
             plano_fracionamento_lista = None
             if tipo_ocorrencia == TIPO_FERIAS:
+                total_dias_lista = (
+                    datetime.strptime(converter_data_iso(data_fim_form), FORMATO_DATA)
+                    - datetime.strptime(converter_data_iso(data_inicio_form), FORMATO_DATA)
+                ).days + 1
+                ano_lista = datetime.strptime(converter_data_iso(data_inicio_form), FORMATO_DATA).year
+                periodos_existentes_lista = periodos_ferias_do_ano(usuarios_por_id[usuario_id], ano_lista)
+                planos_compativeis_lista = planos_fracionamento_compativeis(periodos_existentes_lista + [total_dias_lista])
                 fracionar_lista = st.radio(
                     "Fracionar férias?",
                     options=("Sim", "Não"),
                     horizontal=True,
+                    index=1,
                     key="form_lista_fracionar",
                 ) == "Sim"
                 if fracionar_lista:
-                    plano_fracionamento_lista = st.selectbox(
-                        "Plano de fracionamento",
-                        options=["10 + 10 + 10", "10 + 20", "15 + 15"],
-                        key="form_lista_plano",
-                    )
+                    if planos_compativeis_lista:
+                        plano_fracionamento_lista = st.selectbox(
+                            "Plano de fracionamento",
+                            options=planos_compativeis_lista,
+                            key="form_lista_plano",
+                        )
+                    else:
+                        st.caption("O período selecionado não é compatível com fracionamento.")
 
             registrar = st.form_submit_button("Registrar ocorrência", use_container_width=True)
 
@@ -1065,11 +1371,6 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
             usuario_alvo = usuarios_por_id[usuario_id]
             dias_consumidos_lista = None
             if tipo_ocorrencia == TIPO_FERIAS:
-                total_dias_lista = (
-                    datetime.strptime(converter_data_iso(data_fim_form), FORMATO_DATA)
-                    - datetime.strptime(converter_data_iso(data_inicio_form), FORMATO_DATA)
-                ).days + 1
-
                 if fracionar_lista and plano_fracionamento_lista:
                     dias_validos = dias_validos_por_plano_fracionamento(plano_fracionamento_lista)
                     if dias_validos and total_dias_lista not in dias_validos:
@@ -1088,6 +1389,8 @@ def renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, 
                 data_fim_form,
                 tipo_ocorrencia,
                 dias_consumidos=dias_consumidos_lista,
+                fracionar_ferias=fracionar_lista,
+                plano_fracionamento=plano_fracionamento_lista,
             )
             if periodo_validado is not None:
                 data_inicio_iso, data_fim_iso, _ = periodo_validado
@@ -1320,7 +1623,7 @@ def tab_gestao_usuarios():
         renderizar_tab_envio_email(usuarios)
 
 def verifica_adiciona_ferias(data_inicio, data_fim, fracionar_ferias, plano_fracionamento=None):
-    usuario = st.session_state[CHAVE_USUARIO]
+    usuario = usuario_logado_atualizado()
     total_dias = (
         datetime.strptime(converter_data_iso(data_fim), FORMATO_DATA)
         - datetime.strptime(converter_data_iso(data_inicio), FORMATO_DATA)
@@ -1341,12 +1644,16 @@ def verifica_adiciona_ferias(data_inicio, data_fim, fracionar_ferias, plano_frac
         data_inicio,
         data_fim,
         dias_consumidos=dias_consumidos,
+        fracionar_ferias=fracionar_ferias,
+        plano_fracionamento=plano_fracionamento,
     )
     if periodo_validado is not None:
         data_inicio_iso, data_fim_iso, _ = periodo_validado
         usuario.adiciona_ferias(data_inicio_iso, data_fim_iso, dias_consumidos=dias_consumidos)
+        usuario_logado_atualizado()
         definir_mensagem_rodape("success", "Férias adicionadas com sucesso.")
         limpar_datas()
+        recarregar()
 
 
 def pagina_calendario():
@@ -1366,11 +1673,7 @@ def pagina_calendario():
             evento["title"] = f"{usuario.nome} | {TIPOS_OCORRENCIA.get(evento['extendedProps'].get('tipo'), 'Ocorrência')}"
         calendar_events.extend(eventos_usuario)
 
-    usuario = st.session_state[CHAVE_USUARIO]
-
-    with st.expander("Dias para solicitar"):
-        dias_para_tirar = usuario.dias_para_solicitar()
-        st.markdown(f"O funcionário {usuario.nome} possui {dias_para_tirar} dias disponíveis para solicitar.")
+    usuario = usuario_logado_atualizado()
 
     calendar_widget = calendar(events=calendar_events, options=calendar_options, key="ferias_calendar")
     callback = calendar_widget.get("callback") if calendar_widget else None
@@ -1418,46 +1721,12 @@ def pagina_calendario():
             else:
                 if CHAVE_DATA_INICIO not in st.session_state:
                     st.session_state[CHAVE_DATA_INICIO] = data_selecionada
+                    st.session_state.pop(CHAVE_DATA_FINAL, None)
                     definir_mensagem_rodape("warning", f"Data de início selecionada: {formatar_data_br(data_selecionada)}")
+                    recarregar()
                 else:
                     st.session_state[CHAVE_DATA_FINAL] = data_selecionada
-                    data_inicio = st.session_state[CHAVE_DATA_INICIO]
-                    data_final = data_selecionada
-                    total_dias_selecionado = (
-                        datetime.strptime(converter_data_iso(data_final), FORMATO_DATA)
-                        - datetime.strptime(converter_data_iso(data_inicio), FORMATO_DATA)
-                    ).days + 1
-                    cols = st.columns([0.7, 0.3])
-                    with cols[0]:
-                        st.warning(f"Data início selecionada: {formatar_data_br(data_inicio)}")
-                    with cols[1]:
-                        st.button("Limpar", use_container_width=True, on_click=limpar_datas)
-
-                    cols = st.columns([0.7, 0.3])
-                    with cols[0]:
-                        st.warning(f"Data final selecionada: {formatar_data_br(data_selecionada)}")
-                    with cols[1]:
-                        fracionar_ferias = st.radio(
-                            "Fracionar férias?",
-                            options=("Sim", "Não"),
-                            horizontal=True,
-                            key=CHAVE_FRACIONAR_FERIAS,
-                        ) == "Sim"
-
-                        plano_fracionamento = None
-                        if fracionar_ferias and total_dias_selecionado in (10, 15, 20, 30):
-                            plano_fracionamento = st.selectbox(
-                                "Plano de fracionamento",
-                                options=["10 + 10 + 10", "10 + 20", "15 + 15"],
-                                key=CHAVE_PLANO_FRACIONAMENTO,
-                            )
-
-                        st.button(
-                            "Adicionar férias",
-                            use_container_width=True,
-                            on_click=verifica_adiciona_ferias,
-                            args=(data_inicio, data_selecionada, fracionar_ferias, plano_fracionamento),
-                        )
+                    recarregar()
                 
                 definir_mensagem_rodape("info", f"Data clicada: {formatar_data_br(data_selecionada)}")
 
@@ -1474,6 +1743,10 @@ def pagina_calendario():
         st.session_state.pop("form_lista_data_inicio", None)
         st.session_state.pop("form_lista_data_fim", None)
 
+    if not usuario.acesso_gestor:
+        renderizar_resumo_solicitacao(usuario)
+        renderizar_controles_solicitacao(usuario)
+
     if usuario.acesso_gestor:
         renderizar_gestao_ferias_gestor(calendar_events, usuarios, recursos_por_id, calendar_options)
     else:
@@ -1487,7 +1760,7 @@ def pagina_principal():
         st.write("")
         st.button("Sair", use_container_width=True, on_click=sair)
     st.divider()
-    usuario = st.session_state[CHAVE_USUARIO]
+    usuario = usuario_logado_atualizado()
 
     if usuario.acesso_gestor:
         cols = st.columns(3)
