@@ -415,6 +415,15 @@ def construir_registros_dashboard(usuarios, recursos_por_id, calendar_options):
 def pagina_dashboard_gestor():
     st.subheader("Dashboard do gestor")
     st.caption("Resumo de férias e ausências futuras para apoiar a prevenção de absenteísmo.")
+    st.session_state.setdefault(CHAVE_API_GROQ_USUARIO, obter_chave_api_groq_streamlit())
+
+    with st.expander("Configuração IA do Dashboard", expanded=False):
+        st.text_input(
+            "Chave API Groq (Dashboard)",
+            key=CHAVE_API_GROQ_USUARIO,
+            type="password",
+            help="A mesma chave também é usada na aba de e-mail. Se ficar em branco, o app tenta usar GROQ_API_KEY do ambiente ou do secrets.",
+        )
 
     usuarios = ler_todos_usuarios()
     calendar_options = carregar_opcoes_calendario()
